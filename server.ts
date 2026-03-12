@@ -18,6 +18,9 @@ const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
 
+// ตรวจสอบว่าเป็นสภาพแวดล้อม Vercel หรือไม่
+const IS_VERCEL = process.env.VERCEL === '1';
+
 app.use(express.json({ limit: '50mb' }));
 
 // ระบบจำลองฐานข้อมูลในหน่วยความจำ (In-memory store) พร้อมระบบบันทึกไฟล์ (File Persistence)
@@ -255,6 +258,10 @@ async function loadData(): Promise<boolean> {
 
 // บันทึกข้อมูลลงไฟล์
 function saveData() {
+    if (IS_VERCEL) {
+        console.log('[Database] สภาพแวดล้อม Vercel: ข้ามการบันทึกลงไฟล์ db.json');
+        return;
+    }
     try {
         fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
         console.log('[Database] บันทึกข้อมูลลง db.json สำเร็จ');
@@ -703,7 +710,11 @@ function broadcast(type: string, payload: any, sender?: WebSocket) {
 }
 
 // API Routes
-app.get('/api/data', (req, res) => {
+app.get('/api/data', async (req, res) => {
+  // บน Vercel เราควรโหลดข้อมูลใหม่เสมอหากข้อมูลใน Memory ว่างเปล่า
+  if (data.inspections.length === 0) {
+      await loadData();
+  }
   res.json(data);
 });
 
@@ -923,23 +934,28 @@ app.post('/api/test-sheets', async (req, res) => {
 async function startServer() {
   await loadData();
   
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !IS_VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
+    app.use(express.static(path.join(process.cwd(), 'dist')));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
     });
   }
 
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+// สำหรับ Vercel: Export app เพื่อให้ Vercel Node.js runtime ใช้งานได้
+export default app;
+
+if (!IS_VERCEL || process.env.NODE_ENV !== 'production') {
+    startServer();
+}
