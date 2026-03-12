@@ -26,6 +26,7 @@ const App: React.FC = () => {
   const { settings } = useSettings();
   
   const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('app_auth') === 'true');
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(() => {
       const saved = localStorage.getItem('user_profile');
       return saved ? JSON.parse(saved) : null;
@@ -343,20 +344,64 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = React.useCallback(async () => {
       await logout();
       setIsAuthenticated(false);
       setCurrentUser(null);
       localStorage.removeItem('app_auth');
       localStorage.removeItem('user_profile');
       hasShownWelcome.current = false;
-  };
+  }, []);
+
+  // Auto Logout Logic (15 minutes of inactivity)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let timeoutId: any;
+    let warningTimeouts: any[] = [];
+    const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+
+    const resetTimer = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      warningTimeouts.forEach(id => clearTimeout(id));
+      warningTimeouts = [];
+
+      // Main logout timer
+      timeoutId = setTimeout(() => {
+        setSessionExpired(true);
+        handleLogout();
+      }, INACTIVITY_TIMEOUT);
+
+      // Warning at 5 minutes (10 mins left)
+      warningTimeouts.push(setTimeout(() => {
+        addNotification('INFO', 'แจ้งเตือนความปลอดภัย', 'คุณไม่ได้ใช้งานมา 5 นาทีแล้ว เซสชันจะหมดอายุในอีก 10 นาที');
+      }, 5 * 60 * 1000));
+
+      // Warning at 10 minutes (5 mins left)
+      warningTimeouts.push(setTimeout(() => {
+        addNotification('ALERT', 'แจ้งเตือนความปลอดภัย', 'คุณไม่ได้ใช้งานมา 10 นาทีแล้ว เซสชันจะหมดอายุในอีก 5 นาที');
+      }, 10 * 60 * 1000));
+    };
+
+    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+    events.forEach(event => window.addEventListener(event, resetTimer));
+
+    resetTimer(); // Initialize timer
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      warningTimeouts.forEach(id => clearTimeout(id));
+      events.forEach(event => window.removeEventListener(event, resetTimer));
+    };
+  }, [isAuthenticated, addNotification, handleLogout]);
 
   if (!isAuthenticated) return (
     <Login 
+      sessionExpired={sessionExpired}
       onLogin={(user) => { 
         setIsAuthenticated(true); 
         setCurrentUser(user);
+        setSessionExpired(false);
         localStorage.setItem('app_auth', 'true'); 
         localStorage.setItem('user_profile', JSON.stringify(user));
       }} 

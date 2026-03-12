@@ -1,6 +1,7 @@
 
 import dotenv from 'dotenv';
 dotenv.config(); // Load .env if exists
+dotenv.config({ path: '.env.example' }); // Fallback to .env.example
 
 import express from 'express';
 import { createServer } from 'http';
@@ -17,9 +18,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer });
-
-// ตรวจสอบว่าเป็นสภาพแวดล้อม Vercel หรือไม่
-const IS_VERCEL = process.env.VERCEL === '1';
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -258,10 +256,6 @@ async function loadData(): Promise<boolean> {
 
 // บันทึกข้อมูลลงไฟล์
 function saveData() {
-    if (IS_VERCEL) {
-        console.log('[Database] สภาพแวดล้อม Vercel: ข้ามการบันทึกลงไฟล์ db.json');
-        return;
-    }
     try {
         fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
         console.log('[Database] บันทึกข้อมูลลง db.json สำเร็จ');
@@ -710,11 +704,7 @@ function broadcast(type: string, payload: any, sender?: WebSocket) {
 }
 
 // API Routes
-app.get('/api/data', async (req, res) => {
-  // บน Vercel เราควรโหลดข้อมูลใหม่เสมอหากข้อมูลใน Memory ว่างเปล่า
-  if (data.inspections.length === 0) {
-      await loadData();
-  }
+app.get('/api/data', (req, res) => {
   res.json(data);
 });
 
@@ -934,28 +924,33 @@ app.post('/api/test-sheets', async (req, res) => {
 async function startServer() {
   await loadData();
   
-  if (process.env.NODE_ENV !== 'production' && !IS_VERCEL) {
+  if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(process.cwd(), 'dist')));
+    app.use(express.static(path.join(__dirname, 'dist')));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
+      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
   }
 
-  const PORT = process.env.PORT || 3000;
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+  const PORT = Number(process.env.PORT) || 3000;
+  if (!process.env.VERCEL) {
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-// สำหรับ Vercel: Export app เพื่อให้ Vercel Node.js runtime ใช้งานได้
+// Export for Vercel
 export default app;
 
-if (!IS_VERCEL || process.env.NODE_ENV !== 'production') {
-    startServer();
+if (!process.env.VERCEL) {
+  startServer();
+} else {
+  // On Vercel, we still need to load data
+  loadData().catch(console.error);
 }

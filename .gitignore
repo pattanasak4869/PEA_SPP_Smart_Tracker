@@ -11,18 +11,6 @@ node_modules
 dist
 dist-ssr
 *.local
-.env
-.env.*
-!.env.example
-
-# Google Cloud / Firebase secrets
-*.json
-!package.json
-!package-lock.json
-!tsconfig.json
-!metadata.json
-!firebase-applet-config.json
-!firebase-blueprint.json
 
 # Editor directories and files
 .vscode/*

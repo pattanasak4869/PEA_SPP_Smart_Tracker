@@ -212,24 +212,69 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
 
   // --- 3. Electrical Anomaly Detection ---
   useEffect(() => {
-    // Grounding Ohm Check - Removed per user request
-    
     // Voltage Check
     const v = formData.voltage;
-    if (v > 0 && (v < 198 || v > 242)) {
+    if (v <= 0) return;
+
+    // Determine Standard based on Plant Voltage Level
+    const level = plantDetails?.voltageLevel || 0.22; // Default to 220V (0.22kV)
+    
+    let min = 0;
+    let max = 0;
+    let standardLabel = '';
+    let action = 'Check Tap Changer / Regulator';
+
+    if (level === 22) {
+        min = 20.9;
+        max = 23.1;
+        standardLabel = '22kV ±5% (20.9 - 23.1 kV)';
+    } else if (level === 33) {
+        min = 31.35;
+        max = 34.65;
+        standardLabel = '33kV ±5% (31.35 - 34.65 kV)';
+    } else if (level === 115) {
+        min = 109.25;
+        max = 126.5;
+        standardLabel = '115kV +10% / -5% (109.25 - 126.5 kV)';
+    } else if (level === 0.22 || level < 1) {
+        // Low Voltage 220V/400V
+        min = 0.198;
+        max = 0.242;
+        standardLabel = '220V ±10% (198 - 242 V)';
+    } else {
+        // Generic ±10% for other levels
+        min = level * 0.9;
+        max = level * 1.1;
+        standardLabel = `${level}kV ±10%`;
+    }
+
+    const isOutOfRange = v < min || v > max;
+
+    if (isOutOfRange) {
         if (!alertedVoltRef.current) {
              addNotification(
                 'ALERT',
                 'แรงดันไฟฟ้าผิดปกติ (Voltage Instability)',
-                `ตรวจพบแรงดันไฟฟ้านอกเกณฑ์มาตรฐาน (${v} V)`,
-                `Measured Value: ${v} V\nStandard: 220V ±10% (198-242V)\nAction: Check Tap Changer`
+                `ตรวจพบแรงดันไฟฟ้านอกเกณฑ์มาตรฐาน (${v} kV)`,
+                `Measured Value: ${v} kV\nStandard: ${standardLabel}\nAction: ${action}`
             );
             alertedVoltRef.current = true;
         }
-    } else if (v >= 198 && v <= 242) {
+    } else {
         alertedVoltRef.current = false;
     }
-  }, [formData.groundingOhm, formData.voltage, addNotification]);
+
+    // PQ Data Checks
+    const pq = formData.pqData;
+    if (pq) {
+        if (pq.thd_v && pq.thd_v > 5) {
+            addNotification('ALERT', 'Harmonics Alert (THD-V)', `Voltage Harmonics สูงเกินเกณฑ์มาตรฐาน (${pq.thd_v}%)`, 'Standard: < 5%\nAction: Check Harmonic Filter');
+        }
+        if (pq.powerFactor && pq.powerFactor < 0.85) {
+            addNotification('ALERT', 'Power Factor Alert', `ค่า Power Factor ต่ำกว่าเกณฑ์มาตรฐาน (${pq.powerFactor})`, 'Standard: > 0.85\nAction: Check Capacitor Bank');
+        }
+    }
+  }, [formData.voltage, formData.pqData, plantDetails, addNotification]);
 
   // --- 4. Supercharged GPS Logic (ACTIVE SECURITY) ---
   const prevGeoStatusRef = useRef<GeoStatus>('SEARCHING');
@@ -338,35 +383,65 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
 
     const reader = new FileReader();
     reader.onloadend = async () => {
-      const base64Data = reader.result as string;
-      handleInputChange(field, base64Data);
-      
-      try {
-        const base64Image = base64Data.split(',')[1];
-        const result = await analyzeInspectionImage(base64Image);
-        
-        if (field === 'imageEvidence') {
-            setFormData(prev => ({ 
-                ...prev, 
-                aiAnalysis: result.analysis, 
-                powerQualityScore: result.powerQualityScore 
-            }));
-            if (result.powerQualityScore < 50) {
-                addNotification('ALERT', 'Low Power Quality Score (Outside)', `Score: ${result.powerQualityScore}/100`);
-            }
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
         } else {
-            setFormData(prev => ({ 
-                ...prev, 
-                aiAnalysisInside: result.analysis, 
-                powerQualityScoreInside: result.powerQualityScore 
-            }));
-            if (result.powerQualityScore < 50) {
-                addNotification('ALERT', 'Low Power Quality Score (Inside)', `Score: ${result.powerQualityScore}/100`);
-            }
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
         }
-      } catch (err) { 
-        addNotification('ALERT', 'AI Error', 'วิเคราะห์ภาพล้มเหลว'); 
-      }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const quality = settings.dataSaver ? 0.5 : 0.7;
+        const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+        
+        handleInputChange(field, compressedBase64);
+        
+        try {
+          const base64Image = compressedBase64.split(',')[1];
+          const result = await analyzeInspectionImage(base64Image, plantDetails?.voltageLevel);
+          
+          if (field === 'imageEvidence') {
+              setFormData(prev => ({ 
+                  ...prev, 
+                  aiAnalysis: result.analysis, 
+                  powerQualityScore: result.powerQualityScore 
+              }));
+              if (result.powerQualityScore < 50) {
+                  addNotification('ALERT', 'Low Power Quality Score (Outside)', `Score: ${result.powerQualityScore}/100`);
+              }
+          } else {
+              setFormData(prev => ({ 
+                  ...prev, 
+                  aiAnalysisInside: result.analysis, 
+                  powerQualityScoreInside: result.powerQualityScore 
+              }));
+              if (result.powerQualityScore < 50) {
+                  addNotification('ALERT', 'Low Power Quality Score (Inside)', `Score: ${result.powerQualityScore}/100`);
+              }
+          }
+        } catch (err) { 
+          addNotification('ALERT', 'AI Error', 'วิเคราะห์ภาพล้มเหลว'); 
+        }
+      };
+      img.src = reader.result as string;
     };
     reader.readAsDataURL(file);
   };
@@ -401,7 +476,7 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
       stopCamera();
 
       try {
-        const result = await analyzeInspectionImage(base64Image);
+        const result = await analyzeInspectionImage(base64Image, plantDetails?.voltageLevel);
         
         if (activeCameraField === 'imageEvidence') {
             setFormData(prev => ({ 
@@ -887,14 +962,27 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
                  </h3>
                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Voltage (kV)</label>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">
+                            Voltage (kV) 
+                            {plantDetails?.voltageLevel && (
+                                <span className="ml-2 text-indigo-500 lowercase font-bold">
+                                    Standard: {
+                                        plantDetails.voltageLevel === 22 ? '20.9-23.1' :
+                                        plantDetails.voltageLevel === 33 ? '31.35-34.65' :
+                                        plantDetails.voltageLevel === 115 ? '109.25-126.5' :
+                                        plantDetails.voltageLevel === 0.22 ? '0.198-0.242' :
+                                        `${(plantDetails.voltageLevel * 0.9).toFixed(2)}-${(plantDetails.voltageLevel * 1.1).toFixed(2)}`
+                                    } kV
+                                </span>
+                            )}
+                        </label>
                         <div className="relative">
                             <input 
                                 type="number" 
-                                step="0.1"
+                                step="0.01"
                                 value={formData.voltage || ''}
                                 onChange={(e) => handleInputChange('voltage', parseFloat(e.target.value))}
-                                placeholder="e.g. 22.4"
+                                placeholder={plantDetails?.voltageLevel ? `e.g. ${plantDetails.voltageLevel}` : "e.g. 22.4"}
                                 disabled={isReadOnly}
                                 className="w-full bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
                             />
@@ -917,7 +1005,10 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
                         </div>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">THD-V (%)</label>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">
+                            THD-V (%)
+                            <span className="ml-2 text-indigo-500 lowercase font-bold">Standard: &lt; 5%</span>
+                        </label>
                         <div className="relative">
                             <input 
                                 type="number" 
@@ -932,7 +1023,10 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
                         </div>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">THD-I (%)</label>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">
+                            THD-I (%)
+                            <span className="ml-2 text-indigo-500 lowercase font-bold">Standard: &lt; 5%</span>
+                        </label>
                         <div className="relative">
                             <input 
                                 type="number" 
@@ -947,7 +1041,10 @@ export const InspectionForm: React.FC<InspectionFormProps> = ({ data, onSave, on
                         </div>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Power Factor</label>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">
+                            Power Factor
+                            <span className="ml-2 text-indigo-500 lowercase font-bold">Standard: &gt; 0.85</span>
+                        </label>
                         <input 
                             type="number" 
                             step="0.01"

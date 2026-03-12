@@ -90,7 +90,7 @@ export const getDashboardBriefing = async (inspections: any[]): Promise<string> 
   }, 2, "ระบบพร้อมทำงาน (AI Offline)");
 };
 
-export const analyzeInspectionImage = async (base64Image: string): Promise<{ analysis: string; powerQualityScore: number; faultPotential: string[] }> => {
+export const analyzeInspectionImage = async (base64Image: string, voltageLevel?: number): Promise<{ analysis: string; powerQualityScore: number; faultPotential: string[] }> => {
   const fallback = {
       analysis: "ไม่สามารถวิเคราะห์ภาพได้ในขณะนี้ (ระบบ AI ขัดข้องหรือเกินโควต้า) กรุณาตรวจสอบด้วยสายตา",
       powerQualityScore: 50, // Neutral score
@@ -104,7 +104,7 @@ export const analyzeInspectionImage = async (base64Image: string): Promise<{ ana
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-          { text: `Analyze this power plant installation for PEA Grid Standards focusing on Power Quality (Harmonics, Voltage Stability, Wiring Safety). Return ONLY raw JSON with these keys: {analysis: string (Thai), powerQualityScore: number (0-100), faultPotential: string[]}` }
+          { text: `Analyze this power plant installation for PEA Grid Standards focusing on Power Quality (Harmonics, Voltage Stability, Wiring Safety). ${voltageLevel ? `Voltage Level: ${voltageLevel} kV.` : ''} Return ONLY raw JSON with these keys: {analysis: string (Thai), powerQualityScore: number (0-100), faultPotential: string[]}` }
         ]
       },
       config: {

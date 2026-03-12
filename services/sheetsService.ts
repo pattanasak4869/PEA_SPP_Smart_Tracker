@@ -42,26 +42,34 @@ export const clearAllLocalCaches = async (): Promise<void> => {
 };
 
 // รายชื่อฟิลด์ที่มีขนาดใหญ่ (เช่น รูปภาพ Base64) ที่ต้องแยกไปเก็บใน IndexedDB เพื่อไม่ให้ LocalStorage เต็ม
-const LARGE_FIELDS = [
-  'imageEvidence',
-  'imageEvidenceInside',
-  'uploadedReportUrl',
-  'inspectorSignature',
-  'producerSignature',
-  'voiceNotes'
-];
+const LARGE_FIELDS: Record<string, string[]> = {
+  INSPECTIONS: [
+    'imageEvidence',
+    'imageEvidenceInside',
+    'uploadedReportUrl',
+    'inspectorSignature',
+    'producerSignature',
+    'voiceNotes'
+  ],
+  TOOLS: ['imageUrl'],
+  PLANTS: ['imageUrl']
+};
 
 /**
  * บันทึกข้อมูลขนาดใหญ่ลงใน IndexedDB
- * @param data ข้อมูลการตรวจสอบ
+ * @param data ข้อมูล
+ * @param type ประเภทข้อมูล ('INSPECTIONS' | 'TOOLS' | 'PLANTS')
  * @returns รายชื่อฟิลด์ที่ถูกบันทึกสำเร็จ
  */
-const saveToIDB = async (data: InspectionData): Promise<string[]> => {
+const saveToIDB = async (data: any, type: keyof typeof LARGE_FIELDS): Promise<string[]> => {
     const storedFields: string[] = [];
-    for (const field of LARGE_FIELDS) {
-        const val = (data as any)[field];
+    const fields = LARGE_FIELDS[type];
+    if (!fields) return [];
+
+    for (const field of fields) {
+        const val = data[field];
         if (val && typeof val === 'string' && val.length > 100) {
-            await saveAsset(`inspection_${data.id}_${field}`, val);
+            await saveAsset(`${type.toLowerCase()}_${data.id}_${field}`, val);
             storedFields.push(field);
         }
     }
@@ -70,16 +78,17 @@ const saveToIDB = async (data: InspectionData): Promise<string[]> => {
 
 /**
  * ดึงข้อมูลขนาดใหญ่กลับมาจาก IndexedDB
- * @param data ข้อมูลการตรวจสอบเบื้องต้น
- * @returns ข้อมูลการตรวจสอบที่สมบูรณ์พร้อมรูปภาพ
+ * @param data ข้อมูลเบื้องต้น
+ * @param type ประเภทข้อมูล
+ * @returns ข้อมูลที่สมบูรณ์พร้อมรูปภาพ
  */
-const restoreLargeData = async (data: InspectionData): Promise<InspectionData> => {
+const restoreLargeData = async (data: any, type: keyof typeof LARGE_FIELDS): Promise<any> => {
   const restored = { ...data };
-  const storedFields = (data as any)._storedInIDB as string[] || [];
+  const storedFields = data._storedInIDB as string[] || [];
   
   await Promise.all(storedFields.map(async (field) => {
-      const val = await getAsset(`inspection_${data.id}_${field}`);
-      if (val) (restored as any)[field] = val;
+      const val = await getAsset(`${type.toLowerCase()}_${data.id}_${field}`);
+      if (val) restored[field] = val;
   }));
   
   return restored;
@@ -89,12 +98,12 @@ const restoreLargeData = async (data: InspectionData): Promise<InspectionData> =
  * ลบข้อมูลขนาดใหญ่ออกจาก Object ก่อนบันทึกลง LocalStorage
  * เพื่อป้องกันข้อผิดพลาด "QuotaExceededError"
  */
-const stripLargeFields = (data: InspectionData): InspectionData => {
+const stripLargeFields = (data: any): any => {
     const clone = { ...data };
-    const fields = (clone as any)._storedInIDB || [];
+    const fields = clone._storedInIDB || [];
     
     fields.forEach((field: string) => {
-        delete (clone as any)[field];
+        delete clone[field];
     });
     
     return clone;
@@ -180,7 +189,7 @@ let IS_HYDRATED = false;
  */
 export const fetchInspections = async (): Promise<InspectionData[]> => {
   if (CACHED_INSPECTIONS.length > 0 && !IS_HYDRATED) {
-      const hydrated = await Promise.all(CACHED_INSPECTIONS.map(restoreLargeData));
+      const hydrated = await Promise.all(CACHED_INSPECTIONS.map(item => restoreLargeData(item, 'INSPECTIONS')));
       CACHED_INSPECTIONS = hydrated;
       IS_HYDRATED = true;
   }
@@ -221,7 +230,7 @@ export const fetchInspections = async (): Promise<InspectionData[]> => {
  */
 export const saveInspectionToSheet = async (data: InspectionData, skipNetwork = false): Promise<boolean> => {
   // 1. บันทึกไฟล์ขนาดใหญ่ลง IndexedDB
-  const storedFields = await saveToIDB(data);
+  const storedFields = await saveToIDB(data, 'INSPECTIONS');
   
   // 2. อัปเดต Metadata
   const dataWithMeta = { ...data, _storedInIDB: storedFields };
@@ -266,16 +275,20 @@ export const fetchPlants = async (): Promise<PlantData[]> => {
     const json = await response.json();
     
     if (json.plants) {
-      const serverData = json.plants.map((item: any) => ({
-          ...item,
-          location: typeof item.location === 'string' ? JSON.parse(item.location) : item.location
+      const serverData = await Promise.all(json.plants.map(async (item: any) => {
+          const restored = await restoreLargeData(item, 'PLANTS');
+          return {
+            ...restored,
+            location: typeof restored.location === 'string' ? JSON.parse(restored.location) : restored.location
+          };
       }));
       
       console.log(`[Sync] ได้รับข้อมูลจาก Server: ${serverData.length} รายการ`);
       
       // Merge Strategy: Trust server as the source of truth for the set of IDs
       CACHED_PLANTS = serverData;
-      localStorage.setItem(STORAGE_KEYS.PLANTS, JSON.stringify(serverData));
+      const lightweight = serverData.map(stripLargeFields);
+      localStorage.setItem(STORAGE_KEYS.PLANTS, JSON.stringify(lightweight));
       return serverData;
     }
     return CACHED_PLANTS;
@@ -285,19 +298,29 @@ export const fetchPlants = async (): Promise<PlantData[]> => {
 };
 
 export const savePlant = async (plant: PlantData): Promise<boolean> => {
+   // 1. บันทึกไฟล์ขนาดใหญ่ลง IndexedDB
+   const storedFields = await saveToIDB(plant, 'PLANTS');
+   const plantWithMeta = { ...plant, _storedInIDB: storedFields };
+
    const index = CACHED_PLANTS.findIndex(p => p.id === plant.id);
    if (index >= 0) {
-     CACHED_PLANTS[index] = plant;
+     CACHED_PLANTS[index] = plantWithMeta;
    } else {
-     CACHED_PLANTS.push(plant);
+     CACHED_PLANTS.push(plantWithMeta);
    }
-   localStorage.setItem(STORAGE_KEYS.PLANTS, JSON.stringify(CACHED_PLANTS));
+   
+   try {
+      const lightweightList = CACHED_PLANTS.map(stripLargeFields);
+      localStorage.setItem(STORAGE_KEYS.PLANTS, JSON.stringify(lightweightList));
+   } catch (e) {
+      console.error("LocalStorage เต็ม:", e);
+   }
 
    try {
     const response = await fetch(`${API_URL}/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'savePlant', payload: plant })
+      body: JSON.stringify({ type: 'savePlant', payload: plantWithMeta })
     });
     const result = await response.json();
     return result.status === 'success';
@@ -419,7 +442,7 @@ export const testSheetsConnection = async (): Promise<{ success: boolean; messag
 export const getInspectionDetails = async (id: string): Promise<InspectionData | null> => {
   const inspection = CACHED_INSPECTIONS.find(i => i.id === id);
   if (!inspection) return null;
-  return await restoreLargeData(inspection);
+  return await restoreLargeData(inspection, 'INSPECTIONS');
 };
 
 export const fetchTools = async (): Promise<ToolData[]> => {
@@ -427,13 +450,14 @@ export const fetchTools = async (): Promise<ToolData[]> => {
     const response = await fetch(`${API_URL}/data?t=${Date.now()}`);
     const json = await response.json();
     if (json.tools) {
-      const serverData = json.tools;
+      const serverData = await Promise.all(json.tools.map((item: any) => restoreLargeData(item, 'TOOLS')));
       
       console.log(`[Sync] ได้รับข้อมูลจาก Server: ${serverData.length} รายการ`);
       
       // Merge Strategy: Trust server as the source of truth for the set of IDs
       CACHED_TOOLS = serverData;
-      localStorage.setItem(STORAGE_KEYS.TOOLS, JSON.stringify(CACHED_TOOLS));
+      const lightweight = serverData.map(stripLargeFields);
+      localStorage.setItem(STORAGE_KEYS.TOOLS, JSON.stringify(lightweight));
       return CACHED_TOOLS;
     }
     return CACHED_TOOLS;
@@ -443,19 +467,29 @@ export const fetchTools = async (): Promise<ToolData[]> => {
 };
 
 export const saveTool = async (tool: ToolData): Promise<boolean> => {
+  // 1. บันทึกไฟล์ขนาดใหญ่ลง IndexedDB
+  const storedFields = await saveToIDB(tool, 'TOOLS');
+  const toolWithMeta = { ...tool, _storedInIDB: storedFields };
+
   const index = CACHED_TOOLS.findIndex(t => t.id === tool.id);
   if (index >= 0) {
-    CACHED_TOOLS[index] = tool;
+    CACHED_TOOLS[index] = toolWithMeta;
   } else {
-    CACHED_TOOLS.push(tool);
+    CACHED_TOOLS.push(toolWithMeta);
   }
-  localStorage.setItem(STORAGE_KEYS.TOOLS, JSON.stringify(CACHED_TOOLS));
+  
+  try {
+      const lightweightList = CACHED_TOOLS.map(stripLargeFields);
+      localStorage.setItem(STORAGE_KEYS.TOOLS, JSON.stringify(lightweightList));
+  } catch (e) {
+      console.error("LocalStorage เต็ม:", e);
+  }
 
   try {
     const response = await fetch(`${API_URL}/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'saveTool', payload: tool })
+      body: JSON.stringify({ type: 'saveTool', payload: toolWithMeta })
     });
     const result = await response.json();
     return result.status === 'success';

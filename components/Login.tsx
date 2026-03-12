@@ -1,14 +1,15 @@
 
 import React, { useState } from 'react';
-import { User, Lock, ArrowRight, Smartphone, KeyRound, Loader2, Zap } from 'lucide-react';
+import { User, Lock, ArrowRight, Smartphone, KeyRound, Loader2, Zap, Bell } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { login } from '../services/sheetsService';
 
 interface LoginProps {
   onLogin: (user: any) => void;
+  sessionExpired?: boolean;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+export const Login: React.FC<LoginProps> = ({ onLogin, sessionExpired }) => {
   const { t } = useLanguage();
   const [loginMethod, setLoginMethod] = useState<'PASSWORD' | 'OTP'>('PASSWORD');
   const [isLoading, setIsLoading] = useState(false);
@@ -93,6 +94,12 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
+                {sessionExpired && !error && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs p-3 rounded-xl flex items-center gap-2 animate-fade-in">
+                        <Bell size={14} />
+                        <span>เซสชันหมดอายุเนื่องจากไม่มีการใช้งานเป็นเวลา 15 นาที</span>
+                    </div>
+                )}
                 {error && (
                     <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs p-3 rounded-xl animate-shake">
                         {error}
