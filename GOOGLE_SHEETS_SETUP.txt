@@ -1,0 +1,56 @@
+# คู่มือการตั้งค่าการเชื่อมต่อ Google Sheets (Google Sheets Integration Guide)
+
+เพื่อให้ระบบ PEA PQ Smart Tracker สามารถบันทึกข้อมูลลงใน Google Sheets ได้จริง คุณสามารถเลือกทำได้ 2 วิธีหลักดังนี้:
+
+## วิธีที่ 1: ใช้ Google Apps Script (แนะนำสำหรับความง่าย)
+วิธีนี้เป็นการสร้าง Web App ขนาดเล็กบน Google Sheets เพื่อรับข้อมูลจากแอปนี้
+
+1. เปิด Google Sheets ที่ต้องการเก็บข้อมูล
+2. ไปที่เมนู **Extensions** > **Apps Script**
+3. วางโค้ด Google Script ต่อไปนี้:
+   ```javascript
+   function doPost(e) {
+     var data = JSON.parse(e.postData.contents);
+     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(data.type === 'INSPECTION' ? 'Inspections' : 'Plants');
+     
+     if (data.type === 'INSPECTION') {
+       sheet.appendRow([
+         new Date(), 
+         data.payload.id, 
+         data.payload.plantName, 
+         data.payload.voltage, 
+         data.payload.groundingOhm,
+         data.payload.status
+       ]);
+     }
+     
+     return ContentService.createTextOutput(JSON.stringify({status: 'success'}))
+       .setMimeType(ContentService.MimeType.JSON);
+   }
+   ```
+4. กด **Deploy** > **New Deployment**
+5. เลือกประเภทเป็น **Web App**
+6. ตั้งค่า "Who has access" เป็น **Anyone** (หรือตามความปลอดภัยที่ต้องการ)
+7. คัดลอก **Web App URL** ที่ได้
+8. นำ URL ไปใส่ในไฟล์ `.env` ของโปรเจกต์นี้:
+   ```env
+   GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/.../exec
+   ```
+
+## วิธีที่ 2: ใช้ Google Cloud Service Account (สำหรับระบบขนาดใหญ่)
+1. ไปที่ [Google Cloud Console](https://console.cloud.google.com/)
+2. สร้างโปรเจกต์และเปิดใช้งาน **Google Sheets API**
+3. สร้าง **Service Account** และดาวน์โหลดไฟล์ JSON Key
+4. แชร์ Google Sheet ให้กับ Email ของ Service Account (สิทธิ์ Editor)
+5. ติดตั้งไลบรารี `googleapis` ในโปรเจกต์นี้:
+   `npm install googleapis`
+6. แก้ไขไฟล์ `server.ts` เพื่อใช้ Service Account ในการเขียนข้อมูล
+
+---
+
+### การทำงานของระบบในปัจจุบัน:
+- **Frontend (`sheetsService.ts`)**: จะส่งข้อมูลไปยัง `/api/update` ของ Backend
+- **Backend (`server.ts`)**: มีฟังก์ชัน `syncToGoogleSheets` เตรียมไว้ให้แล้ว ซึ่งจะถูกเรียกทุกครั้งที่มีการบันทึกข้อมูล
+- **Offline Mode**: หากไม่มีอินเทอร์เน็ต ข้อมูลจะถูกเก็บไว้ใน IndexedDB/LocalStorage และจะซิงค์เมื่อกลับมาออนไลน์
+
+จัดทำโดย: AI Developer Assistant

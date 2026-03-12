@@ -1,0 +1,9 @@
+{
+  "name": "Copy of PEA SPP Smart Tracker",
+  "description": "AI-powered Power Quality inspection system for PEA engineers to monitor and advise SPP/VSPP producers.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
